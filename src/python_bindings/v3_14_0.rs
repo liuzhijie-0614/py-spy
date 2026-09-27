@@ -1,9 +1,8 @@
-// Generated bindings for python v3.14.0
+// Generated bindings for python v3.14.5
 #![allow(dead_code)]
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
-#![allow(unnecessary_transmutes)]
 #![allow(clippy::useless_transmute)]
 #![allow(clippy::default_trait_access)]
 #![allow(clippy::cast_lossless)]
@@ -49,9 +48,7 @@ where
     pub unsafe fn raw_get_bit(this: *const Self, index: usize) -> bool {
         debug_assert!(index / 8 < core::mem::size_of::<Storage>());
         let byte_index = index / 8;
-        let byte = unsafe {
-            *(core::ptr::addr_of!((*this).storage) as *const u8).offset(byte_index as isize)
-        };
+        let byte = unsafe { *(core::ptr::addr_of!((*this).storage) as *const u8).add(byte_index) };
         Self::extract_bit(byte, index)
     }
     #[inline]
@@ -184,6 +181,7 @@ impl<T> ::std::fmt::Debug for __IncompleteArrayField<T> {
     }
 }
 pub type __uint32_t = ::std::os::raw::c_uint;
+pub type __uint64_t = ::std::os::raw::c_ulong;
 pub type __dev_t = ::std::os::raw::c_ulong;
 pub type __uid_t = ::std::os::raw::c_uint;
 pub type __ino64_t = ::std::os::raw::c_ulong;
@@ -377,7 +375,9 @@ pub struct _IO_FILE {
     pub _freeres_buf: *mut ::std::os::raw::c_void,
     pub _prevchain: *mut *mut _IO_FILE,
     pub _mode: ::std::os::raw::c_int,
-    pub _unused2: [::std::os::raw::c_char; 20usize],
+    pub _unused3: ::std::os::raw::c_int,
+    pub _total_written: __uint64_t,
+    pub _unused2: [::std::os::raw::c_char; 8usize],
 }
 impl Default for _IO_FILE {
     fn default() -> Self {
@@ -391,29 +391,28 @@ impl Default for _IO_FILE {
 impl _IO_FILE {
     #[inline]
     pub fn _flags2(&self) -> ::std::os::raw::c_int {
-        unsafe { ::std::mem::transmute(self._bitfield_1.get(0usize, 24u8) as u32) }
+        u32::cast_signed(self._bitfield_1.get(0usize, 24u8) as u32)
     }
     #[inline]
     pub fn set__flags2(&mut self, val: ::std::os::raw::c_int) {
-        unsafe {
-            let val: u32 = ::std::mem::transmute(val);
-            self._bitfield_1.set(0usize, 24u8, val as u64)
-        }
+        let val: u32 = i32::cast_unsigned(val);
+        self._bitfield_1.set(0usize, 24u8, val as u64)
     }
     #[inline]
     pub unsafe fn _flags2_raw(this: *const Self) -> ::std::os::raw::c_int {
-        unsafe {
-            ::std::mem::transmute(<__BindgenBitfieldUnit<[u8; 3usize]>>::raw_get(
+        u32::cast_signed(unsafe {
+            <__BindgenBitfieldUnit<[u8; 3usize]>>::raw_get(
                 ::std::ptr::addr_of!((*this)._bitfield_1),
                 0usize,
                 24u8,
-            ) as u32)
-        }
+            )
+        } as u32)
     }
     #[inline]
     pub unsafe fn set__flags2_raw(this: *mut Self, val: ::std::os::raw::c_int) {
+        let val: u32 = i32::cast_unsigned(val);
+
         unsafe {
-            let val: u32 = ::std::mem::transmute(val);
             <__BindgenBitfieldUnit<[u8; 3usize]>>::raw_set(
                 ::std::ptr::addr_of_mut!((*this)._bitfield_1),
                 0usize,
@@ -426,7 +425,7 @@ impl _IO_FILE {
     pub fn new_bitfield_1(_flags2: ::std::os::raw::c_int) -> __BindgenBitfieldUnit<[u8; 3usize]> {
         let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 3usize]> = Default::default();
         __bindgen_bitfield_unit.set(0usize, 24u8, {
-            let _flags2: u32 = unsafe { ::std::mem::transmute(_flags2) };
+            let _flags2: u32 = i32::cast_unsigned(_flags2);
             _flags2 as u64
         });
         __bindgen_bitfield_unit
@@ -1719,6 +1718,7 @@ pub struct _ts {
     pub threading_local_key: *mut PyObject,
     pub threading_local_sentinel: *mut PyObject,
     pub remote_debugger_support: _PyRemoteDebuggerSupport,
+    pub datastack_cached_chunk: *mut _PyStackChunk,
 }
 #[repr(C)]
 #[repr(align(4))]
@@ -2674,6 +2674,7 @@ pub struct _qsbr_shared {
     pub wr_seq: u64,
     pub rd_seq: u64,
     pub array: *mut _qsbr_pad,
+    pub array_raw: *mut ::std::os::raw::c_void,
     pub size: Py_ssize_t,
     pub mutex: PyMutex,
     pub freelist: *mut _qsbr_thread_state,
@@ -2700,6 +2701,8 @@ pub struct _PyThreadStateImpl {
     pub asyncio_tasks_head: llist_node,
     pub qsbr: *mut _qsbr_thread_state,
     pub mem_free_queue: llist_node,
+    pub c_stack_init_base: usize,
+    pub c_stack_init_top: usize,
 }
 impl Default for _PyThreadStateImpl {
     fn default() -> Self {
@@ -2792,7 +2795,7 @@ impl Default for trampoline_api_st {
 pub struct _ceval_runtime_state {
     pub perf: _ceval_runtime_state__bindgen_ty_1,
     pub pending_mainthread: _pending_calls,
-    pub sys_trace_profile_mutex: PyMutex,
+    pub unused_sys_trace_profile_mutex: PyMutex,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -2804,6 +2807,9 @@ pub struct _ceval_runtime_state__bindgen_ty_1 {
     pub trampoline_api: trampoline_api_st,
     pub map_file: *mut FILE,
     pub persist_after_fork: Py_ssize_t,
+    pub prev_eval_frame: _PyFrameEvalFunction,
+    pub trampoline_refcount: Py_ssize_t,
+    pub code_watcher_id: ::std::os::raw::c_int,
 }
 impl Default for _ceval_runtime_state__bindgen_ty_1 {
     fn default() -> Self {
@@ -2907,17 +2913,19 @@ pub struct _gc_runtime_state {
     pub trash_delete_nesting: ::std::os::raw::c_int,
     pub enabled: ::std::os::raw::c_int,
     pub debug: ::std::os::raw::c_int,
-    pub young: gc_generation,
-    pub old: [gc_generation; 2usize],
+    pub generations: [gc_generation; 3usize],
     pub permanent_generation: gc_generation,
     pub generation_stats: [gc_generation_stats; 3usize],
     pub collecting: ::std::os::raw::c_int,
     pub garbage: *mut PyObject,
     pub callbacks: *mut PyObject,
     pub heap_size: Py_ssize_t,
-    pub work_to_do: Py_ssize_t,
-    pub visited_space: ::std::os::raw::c_int,
-    pub phase: ::std::os::raw::c_int,
+    pub dummy1: Py_ssize_t,
+    pub dummy2: ::std::os::raw::c_int,
+    pub dummy3: ::std::os::raw::c_int,
+    pub long_lived_total: Py_ssize_t,
+    pub long_lived_pending: Py_ssize_t,
+    pub generation0: *mut PyGC_Head,
 }
 impl Default for _gc_runtime_state {
     fn default() -> Self {
@@ -3915,8 +3923,8 @@ pub struct _is {
     pub rare_events: _rare_events,
     pub builtins_dict_watcher: PyDict_WatchCallback,
     pub monitors: _Py_GlobalMonitors,
-    pub sys_profile_initialized: bool,
-    pub sys_trace_initialized: bool,
+    pub sys_profile_once_flag: _PyOnceFlag,
+    pub sys_trace_once_flag: _PyOnceFlag,
     pub sys_profiling_threads: Py_ssize_t,
     pub sys_tracing_threads: Py_ssize_t,
     pub monitoring_callables: [[*mut PyObject; 19usize]; 8usize],
@@ -18340,6 +18348,22 @@ impl Default for pyruntimestate__bindgen_ty_1 {
     }
 }
 impl Default for pyruntimestate {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct PyDictKeyEntry {
+    pub me_hash: Py_hash_t,
+    pub me_key: *mut PyObject,
+    pub me_value: *mut PyObject,
+}
+impl Default for PyDictKeyEntry {
     fn default() -> Self {
         let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
         unsafe {

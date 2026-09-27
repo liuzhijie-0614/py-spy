@@ -16,6 +16,7 @@ use crate::python_bindings::{
     v3_8_0, v3_9_5,
 };
 use crate::utils::offset_of;
+use remoteprocess::ProcessMemory;
 
 // Python 3.14+ constants for _PyStackRef tagged pointers
 // https://github.com/python/cpython/blob/main/Include/internal/pycore_stackref.h
@@ -68,6 +69,15 @@ pub trait FrameObject: Copy {
 
     fn code(&self) -> *mut Self::CodeObject;
     fn lasti(&self) -> i32;
+    // Most versions can compute this using only the copied frame. Free-threaded
+    // 3.14 also needs to read the frame's entry in the remote TLBC array.
+    fn lasti_with_process<P: ProcessMemory>(
+        &self,
+        _code: &Self::CodeObject,
+        _process: &P,
+    ) -> Result<i32, anyhow::Error> {
+        Ok(self.lasti())
+    }
     fn back(&self) -> *mut Self;
     fn is_entry(&self) -> bool;
 
@@ -610,6 +620,49 @@ impl FrameObject for v3_14_0t::_PyInterpreterFrame {
             (self.instr_ptr as *const u8).offset_from(co_code) as i32
         }
     }
+    fn lasti_with_process<P: ProcessMemory>(
+        &self,
+        code: &Self::CodeObject,
+        process: &P,
+    ) -> Result<i32, anyhow::Error> {
+        anyhow::ensure!(!code.co_tlbc.is_null(), "Missing TLBC array");
+        let array = process.copy_pointer(code.co_tlbc)?;
+        anyhow::ensure!(
+            self.tlbc_index >= 0 && (self.tlbc_index as isize) < array.size,
+            "Invalid TLBC index"
+        );
+        let entry = (code.co_tlbc as usize)
+            .checked_add(std::mem::offset_of!(v3_14_0t::_PyCodeArray, entries))
+            .and_then(|address| {
+                (self.tlbc_index as usize)
+                    .checked_mul(std::mem::size_of::<usize>())
+                    .and_then(|offset| address.checked_add(offset))
+            })
+            .ok_or_else(|| anyhow::anyhow!("TLBC entry address overflow"))?;
+        let bytecode: usize = process.copy_struct(entry)?;
+        anyhow::ensure!(bytecode != 0, "Missing thread-local bytecode");
+        let byte_offset = (self.instr_ptr as usize)
+            .checked_sub(bytecode)
+            .ok_or_else(|| anyhow::anyhow!("Instruction precedes bytecode copy"))?;
+        let byte_length = usize::try_from(code.ob_base.ob_size)?
+            .checked_mul(2)
+            .ok_or_else(|| anyhow::anyhow!("Bytecode length overflow"))?;
+        anyhow::ensure!(
+            byte_offset < byte_length,
+            "Instruction outside bytecode copy"
+        );
+        // The compact line-table decoder subtracts co_code_adaptive's offset.
+        // Supply that same convention, relative to this frame's bytecode copy.
+        // Integer arithmetic is required: these are addresses in another process,
+        // and instr_ptr and the PyCodeObject need not belong to one allocation.
+        let offset = byte_offset as i128
+            + std::mem::offset_of!(v3_14_0t::PyCodeObject, co_code_adaptive) as i128;
+        anyhow::ensure!(
+            offset >= i32::MIN as i128 && offset <= i32::MAX as i128,
+            "TLBC instruction offset overflow"
+        );
+        Ok(offset as i32)
+    }
     fn back(&self) -> *mut Self {
         self.previous
     }
@@ -1047,6 +1100,85 @@ impl TupleObject for v2_7_15::PyTupleObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_py314t_thread_local_instruction_offsets() {
+        use crate::python_bindings::v3_14_0t::{_PyCodeArray, _PyInterpreterFrame, PyCodeObject};
+        // A flexible array with a shared entry and a separately allocated copy.
+        #[repr(C)]
+        struct CodeArray {
+            size: isize,
+            entries: [usize; 2],
+        }
+        let bytecode = [0u16; 16];
+        let mut array = CodeArray {
+            size: 2,
+            entries: [0, bytecode.as_ptr() as usize],
+        };
+        let mut code = PyCodeObject {
+            co_tlbc: &mut array as *mut CodeArray as *mut _PyCodeArray,
+            ..Default::default()
+        };
+        code.ob_base.ob_size = bytecode.len() as _;
+        let adaptive = std::mem::offset_of!(PyCodeObject, co_code_adaptive);
+        array.entries[0] = &code as *const _ as usize + adaptive;
+        let mut frame = _PyInterpreterFrame::default();
+        frame.f_executable.bits = &code as *const _ as usize;
+        for index in [0, 1] {
+            frame.tlbc_index = index;
+            frame.instr_ptr = (array.entries[index as usize] + 6) as *mut _;
+            assert_eq!(
+                frame
+                    .lasti_with_process(&code, &remoteprocess::LocalProcess)
+                    .unwrap(),
+                adaptive as i32 + 6
+            );
+        }
+        // Check both copies: first/last code units are valid, outside is not.
+        for index in [0, 1] {
+            frame.tlbc_index = index;
+            let base = array.entries[index as usize];
+            for offset in [0, 30] {
+                frame.instr_ptr = (base + offset) as *mut _;
+                assert_eq!(
+                    frame
+                        .lasti_with_process(&code, &remoteprocess::LocalProcess)
+                        .unwrap(),
+                    adaptive as i32 + offset as i32
+                );
+            }
+            for address in [base - 1, base + 32, base + 34] {
+                frame.instr_ptr = address as *mut _;
+                assert!(frame
+                    .lasti_with_process(&code, &remoteprocess::LocalProcess)
+                    .is_err());
+            }
+        }
+        frame.instr_ptr = (array.entries[1] + 6) as *mut _;
+        // Reject stale/invalid entries rather than producing a plausible wrong line.
+        for index in [-1, 2] {
+            frame.tlbc_index = index;
+            assert!(frame
+                .lasti_with_process(&code, &remoteprocess::LocalProcess)
+                .is_err());
+        }
+        frame.tlbc_index = 1;
+        let mut empty_array = CodeArray {
+            size: 2,
+            entries: [0, 0],
+        };
+        let code = PyCodeObject {
+            co_tlbc: &mut empty_array as *mut CodeArray as *mut _PyCodeArray,
+            ..Default::default()
+        };
+        assert!(frame
+            .lasti_with_process(&code, &remoteprocess::LocalProcess)
+            .is_err());
+        let code = PyCodeObject::default();
+        assert!(frame
+            .lasti_with_process(&code, &remoteprocess::LocalProcess)
+            .is_err());
+    }
 
     #[test]
     fn test_py3_11_line_numbers() {
