@@ -823,7 +823,7 @@ pub fn get_windows_python_symbols(
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub fn is_python_lib(pathname: &str) -> bool {
     lazy_static! {
-        static ref RE: Regex = Regex::new(r"/libpython\d.\d\d?(m|d|u)?.so").unwrap();
+        static ref RE: Regex = Regex::new(r"/libpython\d.\d\d?(m|d|u|t|td)?.so").unwrap();
     }
     RE.is_match(pathname)
 }
@@ -885,6 +885,11 @@ mod tests {
         assert!(is_python_lib("/usr/lib/libpython3.4d.so"));
         assert!(is_python_lib("/usr/local/lib/libpython3.8m.so"));
         assert!(is_python_lib("/usr/lib/libpython2.7u.so"));
+
+        // Free-threaded builds use t, or td when also configured with --with-pydebug.
+        assert!(is_python_lib("/usr/local/lib/libpython3.13t.so"));
+        assert!(is_python_lib("/usr/local/lib/libpython3.14t.so.1.0"));
+        assert!(is_python_lib("/usr/local/lib/libpython3.14td.so.1.0"));
 
         // don't blindly match libraries with python in the name (boost_python etc)
         assert!(!is_python_lib("/usr/lib/libboost_python.so"));
