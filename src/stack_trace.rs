@@ -178,7 +178,10 @@ where
         let line = match lineno {
             LineNo::NoLine => 0,
             LineNo::First => code.first_lineno(),
-            LineNo::LastInstruction => match get_line_number(&code, frame.lasti(), process) {
+            LineNo::LastInstruction => match frame
+                .lasti_with_process(&code, process)
+                .and_then(|lasti| get_line_number(&code, lasti, process))
+            {
                 Ok(line) => line,
                 Err(e) => {
                     // Failling to get the line number really shouldn't be fatal here, but

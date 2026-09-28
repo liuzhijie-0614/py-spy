@@ -16,6 +16,7 @@ use crate::python_bindings::{
     v3_8_0, v3_9_5,
 };
 use crate::utils::offset_of;
+use remoteprocess::ProcessMemory;
 
 // Python 3.14+ constants for _PyStackRef tagged pointers
 // https://github.com/python/cpython/blob/main/Include/internal/pycore_stackref.h
@@ -68,6 +69,15 @@ pub trait FrameObject: Copy {
 
     fn code(&self) -> *mut Self::CodeObject;
     fn lasti(&self) -> i32;
+    // Most versions can compute this using only the copied frame. Free-threaded
+    // 3.14 also needs to read the frame's entry in the remote TLBC array.
+    fn lasti_with_process<P: ProcessMemory>(
+        &self,
+        _code: &Self::CodeObject,
+        _process: &P,
+    ) -> Result<i32, anyhow::Error> {
+        Ok(self.lasti())
+    }
     fn back(&self) -> *mut Self;
     fn is_entry(&self) -> bool;
 
@@ -609,6 +619,49 @@ impl FrameObject for v3_14_0t::_PyInterpreterFrame {
             let co_code = code_obj as *const u8;
             (self.instr_ptr as *const u8).offset_from(co_code) as i32
         }
+    }
+    fn lasti_with_process<P: ProcessMemory>(
+        &self,
+        code: &Self::CodeObject,
+        process: &P,
+    ) -> Result<i32, anyhow::Error> {
+        anyhow::ensure!(!code.co_tlbc.is_null(), "Missing TLBC array");
+        let array = process.copy_pointer(code.co_tlbc)?;
+        anyhow::ensure!(
+            self.tlbc_index >= 0 && (self.tlbc_index as isize) < array.size,
+            "Invalid TLBC index"
+        );
+        let entry = (code.co_tlbc as usize)
+            .checked_add(std::mem::offset_of!(v3_14_0t::_PyCodeArray, entries))
+            .and_then(|address| {
+                (self.tlbc_index as usize)
+                    .checked_mul(std::mem::size_of::<usize>())
+                    .and_then(|offset| address.checked_add(offset))
+            })
+            .ok_or_else(|| anyhow::anyhow!("TLBC entry address overflow"))?;
+        let bytecode: usize = process.copy_struct(entry)?;
+        anyhow::ensure!(bytecode != 0, "Missing thread-local bytecode");
+        let byte_offset = (self.instr_ptr as usize)
+            .checked_sub(bytecode)
+            .ok_or_else(|| anyhow::anyhow!("Instruction precedes bytecode copy"))?;
+        let byte_length = usize::try_from(code.ob_base.ob_size)?
+            .checked_mul(2)
+            .ok_or_else(|| anyhow::anyhow!("Bytecode length overflow"))?;
+        anyhow::ensure!(
+            byte_offset < byte_length,
+            "Instruction outside bytecode copy"
+        );
+        // The compact line-table decoder subtracts co_code_adaptive's offset.
+        // Supply that same convention, relative to this frame's bytecode copy.
+        // Integer arithmetic is required: these are addresses in another process,
+        // and instr_ptr and the PyCodeObject need not belong to one allocation.
+        let offset = byte_offset as i128
+            + std::mem::offset_of!(v3_14_0t::PyCodeObject, co_code_adaptive) as i128;
+        anyhow::ensure!(
+            offset >= i32::MIN as i128 && offset <= i32::MAX as i128,
+            "TLBC instruction offset overflow"
+        );
+        Ok(offset as i32)
     }
     fn back(&self) -> *mut Self {
         self.previous

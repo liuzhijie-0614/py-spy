@@ -1,4 +1,4 @@
-// Generated bindings for python v3.14.0
+// Generated bindings for python v3.14.0, with layout updates for v3.14.5
 #![allow(dead_code)]
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
@@ -1719,6 +1719,7 @@ pub struct _ts {
     pub threading_local_key: *mut PyObject,
     pub threading_local_sentinel: *mut PyObject,
     pub remote_debugger_support: _PyRemoteDebuggerSupport,
+    pub datastack_cached_chunk: *mut _PyStackChunk,
 }
 #[repr(C)]
 #[repr(align(4))]
@@ -2674,6 +2675,7 @@ pub struct _qsbr_shared {
     pub wr_seq: u64,
     pub rd_seq: u64,
     pub array: *mut _qsbr_pad,
+    pub array_raw: *mut ::std::os::raw::c_void,
     pub size: Py_ssize_t,
     pub mutex: PyMutex,
     pub freelist: *mut _qsbr_thread_state,
@@ -2700,6 +2702,8 @@ pub struct _PyThreadStateImpl {
     pub asyncio_tasks_head: llist_node,
     pub qsbr: *mut _qsbr_thread_state,
     pub mem_free_queue: llist_node,
+    pub c_stack_init_base: usize,
+    pub c_stack_init_top: usize,
 }
 impl Default for _PyThreadStateImpl {
     fn default() -> Self {
@@ -2792,7 +2796,7 @@ impl Default for trampoline_api_st {
 pub struct _ceval_runtime_state {
     pub perf: _ceval_runtime_state__bindgen_ty_1,
     pub pending_mainthread: _pending_calls,
-    pub sys_trace_profile_mutex: PyMutex,
+    pub unused_sys_trace_profile_mutex: PyMutex,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -2804,6 +2808,9 @@ pub struct _ceval_runtime_state__bindgen_ty_1 {
     pub trampoline_api: trampoline_api_st,
     pub map_file: *mut FILE,
     pub persist_after_fork: Py_ssize_t,
+    pub prev_eval_frame: _PyFrameEvalFunction,
+    pub trampoline_refcount: Py_ssize_t,
+    pub code_watcher_id: ::std::os::raw::c_int,
 }
 impl Default for _ceval_runtime_state__bindgen_ty_1 {
     fn default() -> Self {
@@ -2907,17 +2914,19 @@ pub struct _gc_runtime_state {
     pub trash_delete_nesting: ::std::os::raw::c_int,
     pub enabled: ::std::os::raw::c_int,
     pub debug: ::std::os::raw::c_int,
-    pub young: gc_generation,
-    pub old: [gc_generation; 2usize],
+    pub generations: [gc_generation; 3usize],
     pub permanent_generation: gc_generation,
     pub generation_stats: [gc_generation_stats; 3usize],
     pub collecting: ::std::os::raw::c_int,
     pub garbage: *mut PyObject,
     pub callbacks: *mut PyObject,
     pub heap_size: Py_ssize_t,
-    pub work_to_do: Py_ssize_t,
-    pub visited_space: ::std::os::raw::c_int,
-    pub phase: ::std::os::raw::c_int,
+    pub dummy1: Py_ssize_t,
+    pub dummy2: ::std::os::raw::c_int,
+    pub dummy3: ::std::os::raw::c_int,
+    pub long_lived_total: Py_ssize_t,
+    pub long_lived_pending: Py_ssize_t,
+    pub generation0: *mut PyGC_Head,
 }
 impl Default for _gc_runtime_state {
     fn default() -> Self {
@@ -3915,8 +3924,8 @@ pub struct _is {
     pub rare_events: _rare_events,
     pub builtins_dict_watcher: PyDict_WatchCallback,
     pub monitors: _Py_GlobalMonitors,
-    pub sys_profile_initialized: bool,
-    pub sys_trace_initialized: bool,
+    pub sys_profile_once_flag: _PyOnceFlag,
+    pub sys_trace_once_flag: _PyOnceFlag,
     pub sys_profiling_threads: Py_ssize_t,
     pub sys_tracing_threads: Py_ssize_t,
     pub monitoring_callables: [[*mut PyObject; 19usize]; 8usize],

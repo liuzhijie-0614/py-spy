@@ -823,7 +823,7 @@ pub fn get_windows_python_symbols(
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub fn is_python_lib(pathname: &str) -> bool {
     lazy_static! {
-        static ref RE: Regex = Regex::new(r"/libpython\d.\d\d?(m|d|u)?.so").unwrap();
+        static ref RE: Regex = Regex::new(r"/libpython\d.\d\d?(m|d|u|t|td)?.so").unwrap();
     }
     RE.is_match(pathname)
 }
